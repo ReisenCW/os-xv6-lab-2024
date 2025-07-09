@@ -1,0 +1,6 @@
+1. usertrap()
+2. value:7. represent: exec
+3. user mode
+4. lw	a3,0(zero) # 0 <_entry-0x80000000>, a3
+5. because address 0 is not mapped in the kernel address space, and it caused "load page fault"
+6. initcode, 1
