@@ -8,6 +8,6 @@ main(int argc, char *argv[])
 {
   char *end = sbrk(17 * PGSIZE);
   end += 16 * PGSIZE;
-  write(2, end + 0, 8);    // 改为+0，匹配secret.c的修改
+  write(2, end + 32, 8);
   exit(1);
 }
