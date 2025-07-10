@@ -125,8 +125,6 @@ superpg_test()
     err("sbrk failed");
   
   uint64 s = SUPERPGROUNDUP((uint64) end);
-  printf("end = %p\n", (void*)end);
-  printf("s = %p\n", (void*)s);
   supercheck(s);
   if((pid = fork()) < 0) {
     err("fork");

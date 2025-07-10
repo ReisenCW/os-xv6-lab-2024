@@ -397,7 +397,6 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
   }
   else
   {
-    // printf("uvmalloc: superpage enabled. oldsz = 0x%lx, newsz = 0x%lx\n", oldsz, newsz);
     allow_superpg = 1;
     pgsize = SUPERPGSIZE;
     roundup_oldsz = SUPERPGROUNDUP(oldsz);
