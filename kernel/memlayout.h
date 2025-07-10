@@ -42,8 +42,9 @@
 // from physical address 0x80000000 to PHYSTOP.
 #define KERNBASE 0x80000000L
 #define PHYSTOP (KERNBASE + 128*1024*1024)
-#define PGSTOP (KERNBASE + 64 * 1024 * 1024)
 
+#define N_SUPERPAGES 16
+#define SUPERPAGE_START (PHYSTOP - N_SUPERPAGES * SUPERPGSIZE) // The normal 4K pages ends at SUPERPAGE_START.
 // map the trampoline page to the highest address,
 // in both user and kernel space.
 #define TRAMPOLINE (MAXVA - PGSIZE)

@@ -164,13 +164,12 @@ freeproc(struct proc *p)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
   if (p->pagetable)
-    proc_freepagetable(p->pagetable, p->sz, p->supersz);
+    proc_freepagetable(p->pagetable, p->sz);
   if (p->usyscall)
     kfree((void*)p->usyscall);
   p->usyscall = 0;
   p->pagetable = 0;
   p->sz = 0;
-  p->supersz = 0;
   p->pid = 0;
   p->parent = 0;
   p->name[0] = 0;
@@ -196,7 +195,7 @@ proc_pagetable(struct proc *p)
   // at the highest user virtual address.
   // only the supervisor uses it, on the way
   // to/from user space, so not PTE_U.
-  if(mappages(pagetable, TRAMPOLINE, PGSIZE,
+  if(mappages(0, pagetable, TRAMPOLINE, PGSIZE,
               (uint64)trampoline, PTE_R | PTE_X) < 0){
     uvmfree(pagetable, 0);
     return 0;
@@ -204,13 +203,13 @@ proc_pagetable(struct proc *p)
 
   // map the trapframe page just below the trampoline page, for
   // trampoline.S.
-  if(mappages(pagetable, TRAPFRAME, PGSIZE,
+  if(mappages(0, pagetable, TRAPFRAME, PGSIZE,
               (uint64)(p->trapframe), PTE_R | PTE_W) < 0){
     uvmunmap(pagetable, TRAMPOLINE, 1, 0);
     uvmfree(pagetable, 0);
     return 0;
   }
-  if(mappages(pagetable, USYSCALL, PGSIZE,
+  if(mappages(0, pagetable, USYSCALL, PGSIZE,
               (uint64)(p->usyscall), PTE_R | PTE_U) < 0){
     uvmunmap(pagetable, TRAPFRAME, 1, 0);
     uvmunmap(pagetable, TRAMPOLINE, 1, 0);
@@ -224,12 +223,11 @@ proc_pagetable(struct proc *p)
 // Free a process's page table, and free the
 // physical memory it refers to.
 void
-proc_freepagetable(pagetable_t pagetable, uint64 sz, uint64 supersz)
+proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
   uvmunmap(pagetable, USYSCALL, 1, 0);
-  superuvmfree(pagetable, supersz);
   uvmfree(pagetable, sz);
 }
 
@@ -276,88 +274,47 @@ userinit(void)
 // Return 0 on success, -1 on failure.
 int growproc(int n)
 {
-  uint64 sz, supersz;
+  uint64 sz;
   struct proc *p = myproc();
 
   sz = p->sz;
-  supersz = p->supersz;
-  if (n > 134217728) // >128MB
+  if (n > 0)
   {
-    return -1;
-  }
-  if (n > 67108864) // >64MB
-  {
-    // 超级页分配64MB
-    if ((supersz = superuvmalloc(p->pagetable, supersz, supersz + 67108864, PTE_W)) == 0)
-    {
-      return -1;
-    }
-    // 剩下的用普通分配
-    if ((sz = uvmalloc(p->pagetable, sz, sz + n - 67108864, PTE_W)) == 0)
-    {
-      return -1;
-    }
-  }
-  // 2-64 MB
-  else if (n > 2097152)
-  {
-    // 全部使用超级页
-    if ((supersz = superuvmalloc(p->pagetable, supersz, supersz + n, PTE_W)) == 0)
-    {
-      return -1;
-    }
-  }
-  // 0-2MB
-  else if (n > 0)
-  {
-    // 全部用普通页
     if ((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0)
     {
       return -1;
     }
-  }
-  else if (n < -2097152 && supersz > 0) // 释放 > 2MB且有超级页可释放
-  {
-    supersz = superuvmdealloc(p->pagetable, supersz, supersz + n);
   }
   else if (n < 0)
   {
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
   p->sz = sz;
-  p->supersz = supersz;
   return 0;
 }
 
 // Create a new process, copying the parent.
 // Sets up child kernel stack to return as if from fork() system call.
-int
-fork(void)
+int fork(void)
 {
   int i, pid;
   struct proc *np;
   struct proc *p = myproc();
 
   // Allocate process.
-  if((np = allocproc()) == 0){
+  if ((np = allocproc()) == 0)
+  {
     return -1;
   }
 
   // Copy user memory from parent to child.
-  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
-    freeproc(np);
-    release(&np->lock);
-    return -1;
-  }
-  np->sz = p->sz;
-
-  if (superuvmcopy(p->pagetable, np->pagetable, p->supersz) < 0)
+  if (uvmcopy(p->pagetable, np->pagetable, p->sz) < 0)
   {
     freeproc(np);
     release(&np->lock);
     return -1;
   }
-  np->supersz = p->supersz;
+  np->sz = p->sz;
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
@@ -366,8 +323,8 @@ fork(void)
   np->trapframe->a0 = 0;
 
   // increment reference counts on open file descriptors.
-  for(i = 0; i < NOFILE; i++)
-    if(p->ofile[i])
+  for (i = 0; i < NOFILE; i++)
+    if (p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
 
