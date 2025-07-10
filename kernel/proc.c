@@ -163,13 +163,14 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
-  if(p->usyscall)
+  if (p->pagetable)
+    proc_freepagetable(p->pagetable, p->sz, p->supersz);
+  if (p->usyscall)
     kfree((void*)p->usyscall);
   p->usyscall = 0;
-  if(p->pagetable)
-    proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
   p->sz = 0;
+  p->supersz = 0;
   p->pid = 0;
   p->parent = 0;
   p->name[0] = 0;
@@ -223,11 +224,12 @@ proc_pagetable(struct proc *p)
 // Free a process's page table, and free the
 // physical memory it refers to.
 void
-proc_freepagetable(pagetable_t pagetable, uint64 sz)
+proc_freepagetable(pagetable_t pagetable, uint64 sz, uint64 supersz)
 {
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
   uvmunmap(pagetable, USYSCALL, 1, 0);
+  superuvmfree(pagetable, supersz);
   uvmfree(pagetable, sz);
 }
 
@@ -272,21 +274,58 @@ userinit(void)
 
 // Grow or shrink user memory by n bytes.
 // Return 0 on success, -1 on failure.
-int
-growproc(int n)
+int growproc(int n)
 {
-  uint64 sz;
+  uint64 sz, supersz;
   struct proc *p = myproc();
 
   sz = p->sz;
-  if(n > 0){
-    if((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0) {
+  supersz = p->supersz;
+  if (n > 134217728) // >128MB
+  {
+    return -1;
+  }
+  if (n > 67108864) // >64MB
+  {
+    // 超级页分配64MB
+    if ((supersz = superuvmalloc(p->pagetable, supersz, supersz + 67108864, PTE_W)) == 0)
+    {
       return -1;
     }
-  } else if(n < 0){
+    // 剩下的用普通分配
+    if ((sz = uvmalloc(p->pagetable, sz, sz + n - 67108864, PTE_W)) == 0)
+    {
+      return -1;
+    }
+  }
+  // 2-64 MB
+  else if (n > 2097152)
+  {
+    // 全部使用超级页
+    if ((supersz = superuvmalloc(p->pagetable, supersz, supersz + n, PTE_W)) == 0)
+    {
+      return -1;
+    }
+  }
+  // 0-2MB
+  else if (n > 0)
+  {
+    // 全部用普通页
+    if ((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0)
+    {
+      return -1;
+    }
+  }
+  else if (n < -2097152 && supersz > 0) // 释放 > 2MB且有超级页可释放
+  {
+    supersz = superuvmdealloc(p->pagetable, supersz, supersz + n);
+  }
+  else if (n < 0)
+  {
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
   p->sz = sz;
+  p->supersz = supersz;
   return 0;
 }
 
@@ -311,6 +350,14 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
+
+  if (superuvmcopy(p->pagetable, np->pagetable, p->supersz) < 0)
+  {
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
+  np->supersz = p->supersz;
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);

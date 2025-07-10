@@ -373,7 +373,7 @@ typedef uint64 *pagetable_t; // 512 PTEs
 #define PTE_V (1L << 0) // valid
 #define PTE_R (1L << 1)
 #define PTE_W (1L << 2)
-#define PTE_X (1L << 3)
+#define PTE_X (1L << 3) // executable
 #define PTE_U (1L << 4) // user can access
 
 
@@ -399,3 +399,4 @@ typedef uint64 *pagetable_t; // 512 PTEs
 // Sv39, to avoid having to sign-extend virtual addresses
 // that have the high bit set.
 #define MAXVA (1L << (9 + 9 + 9 + 12 - 1))
+#define SUPERPGSTARTVA (1L << 37) // 超级页起始虚拟地址
