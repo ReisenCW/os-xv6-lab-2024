@@ -65,6 +65,9 @@ usertrap(void)
     intr_on();
 
     syscall();
+    // devintr: returns 2 if timer interrupt,
+    // 1 if other device,
+    // 0 if not recognized.
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
@@ -77,9 +80,21 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2){
+    if(p->alarm_interval > 0){ // 如果设置了alarm_interval
+      p->alarm_ticks--;
+      if (p->alarm_ticks == 0 && p->in_handler == 0) // 如果alarm_ticks为0且不在handler中
+      {
+        // 先保存旧的trapframe再设置新的epc!
+        memmove(&p->sig_trapframe, p->trapframe, sizeof(struct trapframe));
+        p->in_handler = 1; // 标记为在alarm handler中
+        p->alarm_ticks = p->alarm_interval; // 重新设置alarm_ticks
+        p->trapframe->epc = (uint64)p->alarm_handler; // 设置epc为alarm handler的地址
+        // epc: exception program counter, 存储异常发生时的程序计数器值
+      }
+    }
     yield();
-
+  }
   usertrapret();
 }
 
