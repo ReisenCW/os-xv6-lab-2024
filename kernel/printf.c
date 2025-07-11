@@ -162,6 +162,7 @@ printf(char *fmt, ...)
 void
 panic(char *s)
 {
+  backtrace();
   pr.locking = 0;
   printf("panic: ");
   printf("%s\n", s);
@@ -175,4 +176,16 @@ printfinit(void)
 {
   initlock(&pr.lock, "pr");
   pr.locking = 1;
+}
+
+void 
+backtrace(void){
+  printf("backtrace:\n");
+  uint64 fp = r_fp(); // 获取当前帧指针
+  uint64 pg = PGROUNDDOWN(fp); // 因为栈是按地址从高到低分配的，所以用down
+  while (PGROUNDDOWN(fp) == pg) // 每个进程都有一个内核栈，大小为一页
+  {
+    printf("%p\n", (void *)(*(uint64 *)(fp - 8))); // return address
+    fp = *(uint64 *)(fp - 16); // previous fp
+  }
 }
