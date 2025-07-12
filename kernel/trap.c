@@ -65,19 +65,69 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if((which_dev = devintr()) != 0){
+  } 
+  else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  }
+  else if (r_scause() == 15) { // page fault
+    struct proc *p = myproc();
+    uint64 va = r_stval(); // 导致page fault的虚拟地址
+    if (va >= MAXVA)
+    {
+      setkilled(p);
+      goto err;
+    }
+    pte_t *pte = walk(p->pagetable, va, 0); // 获取对应的页表项
+    if (pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0)
+    {
+      setkilled(p);
+      goto err;
+    }
+    if (*pte & PTE_COW) // 如果设置了COW
+    {
+      uint64 pa = PTE2PA(*pte);
+      if (get_ref((void *)pa) == 1) // 如果就一个引用
+      {
+        *pte &= ~PTE_COW; // 清除COW位
+        *pte |= PTE_W;    // 设置写权限
+        sfence_vma();
+      }
+      else // 多个引用，则需要分配新的物理内存块
+      {
+        char *mem = kalloc(); // 分配新的物理内存块
+        if (mem == 0)
+        {
+          printf("usertrap(): kalloc failed!pid=%d\n", p->pid);
+          printf("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
+          setkilled(p);
+        }
+        memmove(mem, (char *)pa, PGSIZE); // 复制旧页面内容
+        uint flags = PTE_FLAGS(*pte);
+        flags &= ~PTE_COW; // 清除COW标志
+        flags |= PTE_W; // 设置为可写
+        *pte = PA2PTE(mem) | flags | PTE_V;
+        kfree((void *)pa); // 旧页面引用-1
+        sfence_vma();
+      }
+    }
+    else
+    {
+      printf("usertrap(): write to read-only page\n");
+      setkilled(p);
+    }
+  }
+  else
+  {
     printf("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
     printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
     setkilled(p);
   }
-
-  if(killed(p))
+err:
+  if (killed(p))
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if (which_dev == 2)
     yield();
 
   usertrapret();

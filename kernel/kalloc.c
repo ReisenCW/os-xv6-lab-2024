@@ -10,9 +10,10 @@
 #include "defs.h"
 
 void freerange(void *pa_start, void *pa_end);
+static int pa2index(uint64 pa);
 
-extern char end[]; // first address after kernel.
-                   // defined by kernel.ld.
+    extern char end[]; // first address after kernel.
+                       // defined by kernel.ld.
 
 struct run {
   struct run *next;
@@ -21,6 +22,7 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
+  int refcount[MAXPAGES];
 } kmem;
 
 void
@@ -35,8 +37,10 @@ freerange(void *pa_start, void *pa_end)
 {
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
-  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
+  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE){
+    kmem.refcount[pa2index((uint64)p)] = 1; // 初始化引用计数
     kfree(p);
+  }
 }
 
 // Free the page of physical memory pointed at by pa,
@@ -52,13 +56,16 @@ kfree(void *pa)
     panic("kfree");
 
   // Fill with junk to catch dangling refs.
-  memset(pa, 1, PGSIZE);
-
-  r = (struct run*)pa;
-
+  int index = pa2index((uint64)pa);
+  if (index < 0 || index >= MAXPAGES)
+    panic("kfree: invalid physical address");
   acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
+  if(--kmem.refcount[index] == 0) { // 引用计数为0，则释放
+    memset(pa, 1, PGSIZE); // 用垃圾填充以释放空间
+    r = (struct run *)pa;
+    r->next = kmem.freelist;
+    kmem.freelist = r;
+  }
   release(&kmem.lock);
 }
 
@@ -72,11 +79,48 @@ kalloc(void)
 
   acquire(&kmem.lock);
   r = kmem.freelist;
-  if(r)
+  if(r){
     kmem.freelist = r->next;
+    kmem.refcount[pa2index((uint64)r)] = 1; // 初始化新空间r的引用计数为1
+  }
   release(&kmem.lock);
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
+}
+
+// 获取物理地址对应的引用计数数组索引
+int
+pa2index(uint64 pa)
+{
+  if (pa < (uint64)end)
+    return -1;
+  uint64 idx = (pa - (uint64)end) / PGSIZE;
+  if (idx >= MAXPAGES)
+    return -1;
+  return idx;
+}
+
+void inc_ref(void * pa){
+  int idx = pa2index((uint64)pa);
+  if (idx < 0)
+    return;
+  acquire(&kmem.lock);
+  kmem.refcount[idx]++;
+  release(&kmem.lock);
+}
+
+// 获取引用计数
+int get_ref(void *pa)
+{
+  int idx = pa2index((uint64)pa);
+  int count;
+  if (idx < 0)
+    return -1;
+
+  acquire(&kmem.lock);
+  count = kmem.refcount[idx];
+  release(&kmem.lock);
+  return count;
 }
