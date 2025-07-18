@@ -137,14 +137,14 @@ e1000_transmit(char *buf, int len)
 static void
 e1000_recv(void)
 {
-  uint32 rdh = regs[E1000_RDH];
-  uint32 rdt = regs[E1000_RDT];
+  acquire(&e1000_lock);
   // 遍历所有可能的已完成描述符（从RDT+1到RDH）
   while (1) {
     // 计算下一个要检查的描述符索引
-    uint32 next_rdt = (rdt + 1) % RX_RING_SIZE;
+    uint32 next_rdt = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
     // 如果已到达RDH，表示没有更多待处理的描述符
-    if (next_rdt == rdh) {
+    if (next_rdt == regs[E1000_RDH])
+    {
       break;
     }
     // 获取描述符和对应的缓冲区
@@ -166,11 +166,10 @@ e1000_recv(void)
       rx_ring[next_rdt].addr = (uint64)rx_bufs[next_rdt];
       rx_ring[next_rdt].status = 0;
     }
-    // 更新RDT指向下一个描述符
-    rdt = next_rdt;
     // 更新硬件RDT寄存器
-    regs[E1000_RDT] = rdt;
+    regs[E1000_RDT] = next_rdt;
   }
+  release(&e1000_lock);
 }
 
 void
