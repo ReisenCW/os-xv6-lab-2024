@@ -137,7 +137,6 @@ e1000_transmit(char *buf, int len)
 static void
 e1000_recv(void)
 {
-  acquire(&e1000_lock);
   // 遍历所有可能的已完成描述符（从RDT+1到RDH）
   while (1) {
     // 计算下一个要检查的描述符索引
@@ -169,7 +168,6 @@ e1000_recv(void)
     // 更新硬件RDT寄存器
     regs[E1000_RDT] = next_rdt;
   }
-  release(&e1000_lock);
 }
 
 void
