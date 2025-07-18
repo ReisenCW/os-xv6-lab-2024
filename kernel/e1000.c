@@ -7,13 +7,13 @@
 #include "defs.h"
 #include "e1000_dev.h"
 
-#define TX_RING_SIZE 16
-static struct tx_desc tx_ring[TX_RING_SIZE] __attribute__((aligned(16)));
-static char *tx_bufs[TX_RING_SIZE];
+#define TX_RING_SIZE 16 // 传输环
+static struct tx_desc tx_ring[TX_RING_SIZE] __attribute__((aligned(16))); // 发送描述符环（16字节对齐，硬件要求）
+static char *tx_bufs[TX_RING_SIZE]; // 存储待发送的数据包内容
 
-#define RX_RING_SIZE 16
-static struct rx_desc rx_ring[RX_RING_SIZE] __attribute__((aligned(16)));
-static char *rx_bufs[RX_RING_SIZE];
+#define RX_RING_SIZE 16 // 接收环
+static struct rx_desc rx_ring[RX_RING_SIZE] __attribute__((aligned(16))); // 接收描述符环（16字节对齐）
+static char *rx_bufs[RX_RING_SIZE]; // 存储接收的数据包内容
 
 // remember where the e1000's registers live.
 static volatile uint32 *regs;
@@ -41,22 +41,22 @@ e1000_init(uint32 *xregs)
   // [E1000 14.5] Transmit initialization
   memset(tx_ring, 0, sizeof(tx_ring));
   for (i = 0; i < TX_RING_SIZE; i++) {
-    tx_ring[i].status = E1000_TXD_STAT_DD;
-    tx_bufs[i] = 0;
+    tx_ring[i].status = E1000_TXD_STAT_DD; // 初始状态：描述符“已完成” Descriptor Done，表示可用
+    tx_bufs[i] = 0;                        // 发送缓冲区暂未分配（后续发送数据时动态分配）
   }
-  regs[E1000_TDBAL] = (uint64) tx_ring;
+  regs[E1000_TDBAL] = (uint64)tx_ring; // 传输环基地址
   if(sizeof(tx_ring) % 128 != 0)
     panic("e1000");
-  regs[E1000_TDLEN] = sizeof(tx_ring);
-  regs[E1000_TDH] = regs[E1000_TDT] = 0;
-  
+  regs[E1000_TDLEN] = sizeof(tx_ring); // 传输环长度
+  regs[E1000_TDH] = regs[E1000_TDT] = 0; // 初始化发送头（TDH）和尾（TDT）指针为0（暂无待发送包）
+
   // [E1000 14.4] Receive initialization
   memset(rx_ring, 0, sizeof(rx_ring));
   for (i = 0; i < RX_RING_SIZE; i++) {
-    rx_bufs[i] = kalloc();
+    rx_bufs[i] = kalloc();                  // 为每个接收描述符分配缓冲区（内核内存）
     if (!rx_bufs[i])
       panic("e1000");
-    rx_ring[i].addr = (uint64) rx_bufs[i];
+    rx_ring[i].addr = (uint64)rx_bufs[i];   // 描述符的addr指向缓冲区物理地址（供DMA写入）
   }
   regs[E1000_RDBAL] = (uint64) rx_ring;
   if(sizeof(rx_ring) % 128 != 0)
@@ -65,10 +65,11 @@ e1000_init(uint32 *xregs)
   regs[E1000_RDT] = RX_RING_SIZE - 1;
   regs[E1000_RDLEN] = sizeof(rx_ring);
 
-  // filter by qemu's MAC address, 52:54:00:12:34:56
-  regs[E1000_RA] = 0x12005452;
-  regs[E1000_RA+1] = 0x5634 | (1<<31);
-  // multicast table
+  // filter by qemu's MAC address, 52:54:00:12:34:56 只接收目标为本机的数据包
+  // MAC地址共6字节，分两次写入E1000_RA寄存器（32位寄存器，需拆分）
+  regs[E1000_RA] = 0x12005452; // 低32位：0x52 0x54 0x00 0x12 → 对应“52:54:00:12”
+  regs[E1000_RA + 1] = 0x5634 | (1 << 31); // 高16位：0x34 0x56（对应“34:56”），并设置最高位（1<<31）表示“地址有效”
+  // multicast table 禁用组播，只接收单播和广播
   for (int i = 0; i < 4096/32; i++)
     regs[E1000_MTA + i] = 0;
 
@@ -94,28 +95,51 @@ e1000_init(uint32 *xregs)
 int
 e1000_transmit(char *buf, int len)
 {
-  //
-  // Your code here.
-  //
-  // buf contains an ethernet frame; program it into
-  // the TX descriptor ring so that the e1000 sends it. Stash
-  // a pointer so that it can be freed after send completes.
-  //
+  // buf contains an ethernet frame; 
+  // program it into the TX descriptor ring so that the e1000 sends it.
+  // Stash a pointer so that it can be freed after send completes.
 
-  
+  // 检查帧长度是否合法（以太网帧最大长度为1518字节，包含头部和CRC）
+  if (len > DATA_MAX)
+  {
+    printf("e1000: packet too large (%d > %d)\n", len, DATA_MAX);
+    return -1;
+  }
+  acquire(&e1000_lock);
+  // 查找下一个可用的发送描述符
+  int tdt = regs[E1000_TDT]; // 获取当前尾指针位置
+  struct tx_desc *dp = &tx_ring[tdt]; // 获取对应的发送描述符
+  if( !dp->status & E1000_TXD_STAT_DD ) {
+    // 如果描述符未完成，说明发送环已满，无法发送新包
+    release(&e1000_lock);
+    printf("e1000: transmit ring full\n");
+    return -1;
+  }
+  // 如果之前的缓冲区不为空，释放它（因为这个描述符即将被重用）
+  if (tx_bufs[tdt])
+  {
+    kfree(tx_bufs[tdt]);
+  }
+  tx_bufs[tdt] = buf; // 保存当前发送缓冲区指针
+  dp->addr = (uint64)buf; // 设置描述符的地址为缓冲区物理地址
+  dp->length = len; // 设置数据长度
+  dp->cso = 0; // 无分段偏移
+  dp->cmd = E1000_TXD_CMD_EOP | E1000_TXD_CMD_RS; // 设置命令：end of packet , reprot status
+  dp->status = 0; // 清除状态位
+
+  // 更新尾指针，指向下一个可用描述符
+  tdt = (tdt + 1) % TX_RING_SIZE; // 环形
+  regs[E1000_TDT] = tdt; // 更新硬件尾指针
+
+  release(&e1000_lock);
   return 0;
 }
 
 static void
 e1000_recv(void)
 {
-  //
-  // Your code here.
-  //
   // Check for packets that have arrived from the e1000
   // Create and deliver a buf for each packet (using net_rx()).
-  //
-
 }
 
 void
