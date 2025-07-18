@@ -102,7 +102,6 @@ e1000_transmit(char *buf, int len)
   // 检查帧长度是否合法（以太网帧最大长度为1518字节，包含头部和CRC）
   if (len > DATA_MAX)
   {
-    printf("e1000: packet too large (%d > %d)\n", len, DATA_MAX);
     return -1;
   }
   acquire(&e1000_lock);
@@ -112,7 +111,6 @@ e1000_transmit(char *buf, int len)
   if( !dp->status & E1000_TXD_STAT_DD ) {
     // 如果描述符未完成，说明发送环已满，无法发送新包
     release(&e1000_lock);
-    printf("e1000: transmit ring full\n");
     return -1;
   }
   // 如果之前的缓冲区不为空，释放它（因为这个描述符即将被重用）
@@ -123,7 +121,6 @@ e1000_transmit(char *buf, int len)
   tx_bufs[tdt] = buf; // 保存当前发送缓冲区指针
   dp->addr = (uint64)buf; // 设置描述符的地址为缓冲区物理地址
   dp->length = len; // 设置数据长度
-  dp->cso = 0; // 无分段偏移
   dp->cmd = E1000_TXD_CMD_EOP | E1000_TXD_CMD_RS; // 设置命令：end of packet , reprot status
   dp->status = 0; // 清除状态位
 
@@ -135,11 +132,45 @@ e1000_transmit(char *buf, int len)
   return 0;
 }
 
+// RDT(Receive Descriptor Tail)：软件维护，指向最后一个被处理的描述符
+// RDH(Receive Descriptor Head)：由硬件维护，指向下一个将被写入的位置
 static void
 e1000_recv(void)
 {
-  // Check for packets that have arrived from the e1000
-  // Create and deliver a buf for each packet (using net_rx()).
+  uint32 rdh = regs[E1000_RDH];
+  uint32 rdt = regs[E1000_RDT];
+  // 遍历所有可能的已完成描述符（从RDT+1到RDH）
+  while (1) {
+    // 计算下一个要检查的描述符索引
+    uint32 next_rdt = (rdt + 1) % RX_RING_SIZE;
+    // 如果已到达RDH，表示没有更多待处理的描述符
+    if (next_rdt == rdh) {
+      break;
+    }
+    // 获取描述符和对应的缓冲区
+    struct rx_desc *desc = &rx_ring[next_rdt];
+    // 检查描述符是否已完成（DD=1）
+    if (!(desc->status & E1000_RXD_STAT_DD)) {
+      break;
+    }
+
+    if(desc->status & E1000_RXD_STAT_EOP) {
+      int length = rx_ring[next_rdt].length;
+      net_rx(rx_bufs[next_rdt], length); // 传递给网络协议栈
+      // 分配新空间
+      rx_bufs[next_rdt] = kalloc();
+      if (!rx_bufs[next_rdt])
+      {
+        panic("e1000_recv: kalloc failed");
+      }
+      rx_ring[next_rdt].addr = (uint64)rx_bufs[next_rdt];
+      rx_ring[next_rdt].status = 0;
+    }
+    // 更新RDT指向下一个描述符
+    rdt = next_rdt;
+    // 更新硬件RDT寄存器
+    regs[E1000_RDT] = rdt;
+  }
 }
 
 void
