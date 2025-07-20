@@ -82,7 +82,7 @@ bget(uint dev, uint blockno)
   }
   release(&bcache.buckets[key].lock); // 没找到, 释放哈希桶锁
   int i = key;
-  struct buf *prev;
+  struct buf *prev = 0;
   do // 遍历其它桶
   {
     acquire(&bcache.buckets[i].lock);
