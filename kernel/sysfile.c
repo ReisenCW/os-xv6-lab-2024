@@ -301,6 +301,29 @@ create(char *path, short type, short major, short minor)
   return 0;
 }
 
+struct inode *
+open_symlink(struct inode *ip) {
+  int count = 0;
+  char target[MAXPATH];
+  struct inode *dp = ip;
+  while (dp->type == T_SYMLINK) { // 只要当前 inode 是符号链接，就继续解析
+    if (readi(dp, 0, (uint64)&target, 0, sizeof(target)) != sizeof(target) || count > 10) {
+      iunlockput(dp);
+      end_op();
+      return 0;
+    }
+    iunlockput(dp);
+    dp = namei(target); // 解析目标路径，获取新的 inode
+    if (dp == 0) { // 不存在
+      end_op();
+      return 0;
+    }
+    count++; // 计数器++，防止无限循环
+    ilock(dp);
+  }
+  return dp;
+}
+
 uint64
 sys_open(void)
 {
@@ -328,6 +351,11 @@ sys_open(void)
       return -1;
     }
     ilock(ip);
+    if ((omode & O_NOFOLLOW) == 0 && ip->type == T_SYMLINK) { // 未指定 O_NOFOLLOW 标志且当前文件是符号链接
+      if ((ip = open_symlink(ip)) == 0) { // 打开symlink
+        return -1;
+      }
+    }
     if(ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);
       end_op();
@@ -501,5 +529,32 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+// char *target, char *path
+// 在 path 处创建一个新的符号链接，指向由 `target` 指定的文件
+uint64 
+sys_symlink()
+{
+  char path[MAXPATH];
+  char target[MAXPATH];
+  struct inode *ip;
+
+  begin_op(); // 开始文件系统事务（用于日志记录和原子性）
+  if (argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0 || (ip = create(path, T_SYMLINK, 0, 0)) == 0)
+  {
+    end_op();
+    return -1;
+  }
+  // 将target地址写入ip指向的符号链接文件, 0表示非用户空间, 返回值为成功写入的字节数
+  if (writei(ip, 0, (uint64)&target, 0, sizeof(target)) != sizeof(target)) 
+  {
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+  iunlockput(ip);
+  end_op();
   return 0;
 }

@@ -416,7 +416,46 @@ bmap(struct inode *ip, uint bn)
     brelse(bp);
     return addr;
   }
+  bn -= NINDIRECT;
 
+  if(bn < NDINDIRECT){
+    if ((addr = ip->addrs[NDIRECT+1]) == 0) {
+      addr = balloc(ip->dev);
+      if (addr == 0)
+        return 0;
+      ip->addrs[NDIRECT+1] = addr;
+    }
+    bp = bread(ip->dev, addr);
+    a = (uint *)bp->data;
+    uint bn1 = bn / NINDIRECT; // 双间接块的索引
+    uint bn2 = bn % NINDIRECT; // 双间接块索引到的间接块的索引
+    if ((addr = a[bn1]) == 0)
+    { // 先索引间接块，若不存在则分配
+      addr = balloc(ip->dev);
+      if (addr == 0)
+      {
+        brelse(bp);
+        return 0;
+      }
+      a[bn1] = addr;
+      log_write(bp);
+    }
+    brelse(bp);
+    bp = bread(ip->dev, addr); // 读取间接块
+    a = (uint *)bp->data;      // a[bn2]是间接块索引到的具体数据块
+    if ((addr = a[bn2]) == 0)
+    { // 再索引到具体数据块，若不存在则分配
+      addr = balloc(ip->dev);
+      if (addr)
+      {
+        a[bn2] = addr;
+        log_write(bp);
+      }
+    }
+    brelse(bp);
+
+    return addr;
+  }
   panic("bmap: out of range");
 }
 
@@ -426,8 +465,8 @@ void
 itrunc(struct inode *ip)
 {
   int i, j;
-  struct buf *bp;
-  uint *a;
+  struct buf *bp, *bp1;
+  uint *a, *a1;
 
   for(i = 0; i < NDIRECT; i++){
     if(ip->addrs[i]){
@@ -448,6 +487,25 @@ itrunc(struct inode *ip)
     ip->addrs[NDIRECT] = 0;
   }
 
+  if (ip->addrs[NDIRECT + 1]) {// 如果存在双间接块
+    bp = bread(ip->dev, ip->addrs[NDIRECT + 1]);
+    a = (uint *)bp->data;
+    for (j = 0; j < NINDIRECT; j++) { // 遍历双间接块的每个间接块
+      if (a[j]) {
+        bp1 = bread(ip->dev, a[j]);
+        a1 = (uint *)bp1->data;
+        for (int k = 0; k < NINDIRECT; k++) { // 遍历该间接块的每个块
+          if (a1[k])
+            bfree(ip->dev, a1[k]);
+        }
+        brelse(bp1);
+        bfree(ip->dev, a[j]);
+      }
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT + 1]);
+    ip->addrs[NDIRECT + 1] = 0;
+  }
   ip->size = 0;
   iupdate(ip);
 }
