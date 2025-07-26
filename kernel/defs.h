@@ -148,6 +148,10 @@ void            argaddr(int, uint64 *);
 int             fetchstr(uint64, char*, int);
 int             fetchaddr(uint64, uint64*);
 void            syscall();
+#ifdef LAB_MMAP
+void argsizet(int, size_t *);
+void arglong(int, long *);
+#endif
 
 // trap.c
 extern uint     ticks;
@@ -186,6 +190,9 @@ void            vmprint(pagetable_t);
 #endif
 #ifdef LAB_PGTBL
 pte_t*          pgpte(pagetable_t, uint64);
+#endif
+#ifdef LAB_MMAP
+int munmap(int i, struct proc *, uint64, int);
 #endif
 
 // plic.c
@@ -236,4 +243,4 @@ int             e1000_transmit(char *, int);
 void            netinit(void);
 void            net_rx(char *buf, int len);
 
-#endif
+#endif 

@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fs.h"
+#include "sleeplock.h"
+#include "file.h"
+#include "fcntl.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -67,7 +71,52 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  }
+#ifdef LAB_MMAP
+  else if (r_scause() == 13 || r_scause() == 15) {// 发生了页错误
+    struct proc *p = myproc();
+    uint64 va = r_stval(); // 获取触发页错误的虚拟地址
+    va = PGROUNDDOWN(va);  // 向下取整到页边界
+    if (va >= MAXVA) {
+      setkilled(p);
+      exit(-1);
+    }
+    // 找到匹配的 VMA，处理页错误
+    int i = 0;
+    for (; i < 16; i++){
+      struct vma trapvma = p->pvma[i];
+      // 检查虚拟地址是否在 该 VMA 的范围内
+      if (va >= trapvma.addr && va < trapvma.addr + trapvma.len) {
+        char *mem = kalloc(); // 分配一页物理内存
+        memset(mem, 0, PGSIZE); // 刷新分配的内存
+        struct inode *ip = trapvma.vfile->ip; // 获取文件的 inode
+        int perm = PTE_U; // 用户可访问
+        if (trapvma.prot & PROT_READ)
+          perm |= PTE_R; // 如果 VMA 可读，设置 PTE_R
+        if (trapvma.prot & PROT_WRITE)
+          perm |= PTE_W; // 如果 VMA 可写，设置 PTE_W
+        else {
+          if (r_scause() == 15) // 写操作但无写权限
+          {
+            setkilled(p);
+            exit(-1);
+          }
+        }
+        uint off = va - trapvma.addr + trapvma.offset; // 从文件的off开始读数据
+        ilock(ip);
+        readi(ip, 0, (uint64)mem, off, PGSIZE); // 从文件读取数据到内存
+        iunlock(ip);
+        mappages(p->pagetable, va, PGSIZE, (uint64)mem, perm); // 把虚拟地址映射到物理地址
+        break;
+      }
+    }
+    if (i == 16) { // 未找到匹配 VMA
+      setkilled(p);
+      exit(-1);
+    }
+  }
+#endif
+  else {
     printf("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
     printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
     setkilled(p);

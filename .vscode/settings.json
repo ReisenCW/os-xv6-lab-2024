@@ -1,0 +1,10 @@
+{
+  "files.associations": {
+    "riscv.h": "c",
+    "types.h": "c",
+    "sleeplock.h": "c",
+    "random": "c",
+    "limits": "c",
+    "algorithm": "c"
+  }
+}

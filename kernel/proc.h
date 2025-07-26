@@ -1,3 +1,5 @@
+#include "defs.h"
+
 // Saved registers for kernel context switches.
 struct context {
   uint64 ra;
@@ -81,6 +83,23 @@ struct trapframe {
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
+#ifdef LAB_MMAP
+struct vma // virtual memory area
+{
+  uint64 addr;            // 起始地址
+  size_t len;             // 区域长度
+  int prot;               // 访问权限: PROT_READ, PROT_WRITE, PROT_EXEC
+  int flags;              // 标志: MAP_PRIVATE, MAP_SHARED
+  int fd;                 // 文件描述符, 指向被映射的文件
+  off_t offset;           // 偏移量, 表示 VMA 映射从文件的哪个位置开始
+  struct file *vfile;     // 指向文件结构体（struct file）的指针
+  int npages;             // 该 VMA 占用的物理页数
+};
+#endif
+
+
+
+
 // Per-process state
 struct proc {
   struct spinlock lock;
@@ -104,4 +123,7 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+#ifdef LAB_MMAP
+  struct vma pvma[16];
+#endif 
 };

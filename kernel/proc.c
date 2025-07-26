@@ -294,6 +294,14 @@ fork(void)
     release(&np->lock);
     return -1;
   }
+#ifdef LAB_MMAP
+// 把父进程的 VMA 复制到子进程
+  for (int i = 0; i < 16; i++) {
+    np->pvma[i] = p->pvma[i];
+    if (p->pvma[i].vfile)
+      np->pvma[i].vfile = filedup(p->pvma[i].vfile);
+  }
+#endif
   np->sz = p->sz;
 
   // copy saved user registers.
@@ -359,7 +367,14 @@ exit(int status)
       p->ofile[fd] = 0;
     }
   }
-
+#ifdef LAB_MMAP
+// 遍历所有的 VMA，释放它们
+  for (int i = 0; i < 16; i++) {
+    if (p->pvma[i].npages != 0) {
+      munmap(i, p, p->pvma[i].addr, p->pvma[i].len);
+    }
+  }
+#endif
   begin_op();
   iput(p->cwd);
   end_op();
